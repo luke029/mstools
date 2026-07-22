@@ -91,6 +91,7 @@ const callMhtoolsGetAllLogs = rpc.declare({
 const callMhtoolsClearLogs = rpc.declare({
 	object: 'luci.mhtools',
 	method: 'clear_logs',
+	params: ['type'],
 	expect: { '': {} }
 });
 
@@ -185,8 +186,8 @@ return baseclass.extend({
 		return callMhtoolsGetAllLogs(String(lines));
 	},
 
-	clearLogs: function () {
-		return callMhtoolsClearLogs();
+	clearLogs: function (type) {
+		return callMhtoolsClearLogs(type);
 	},
 
 	getProfileContent: function (filename) {

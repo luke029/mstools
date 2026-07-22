@@ -485,8 +485,12 @@ const methods = {
 	},
 
 	clear_logs: {
-		call: function () {
-			let logFiles = ['/var/log/mhtools/app.log', '/var/log/mhtools/mihomo.log'];
+		args: { type: 'type' },
+		call: function (req) {
+			let type = req.args?.type || 'all';
+			let logFiles = [];
+			if (type == 'app' || type == 'all') push(logFiles, '/var/log/mhtools/app.log');
+			if (type == 'kernel' || type == 'all') push(logFiles, '/var/log/mhtools/mihomo.log');
 			for (let i = 0; i < length(logFiles); i++) writefile(logFiles[i], '');
 			return { success: true };
 		}
