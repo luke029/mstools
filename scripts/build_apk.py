@@ -13,6 +13,8 @@ import zlib
 import os
 import sys
 import time
+import subprocess
+import tempfile
 from typing import Optional
 from dataclasses import dataclass, field
 
@@ -431,8 +433,24 @@ def build_paths_and_files(w: AdbWriter, files: list[PackageFile]) -> tuple:
     return w.val_array(list(dir_objects.values())), file_entries
 
 
+def sign_rsa_sha256(data: bytes, key_path: str) -> bytes:
+    """用 openssl 对数据做 RSA-SHA256 签名"""
+    with tempfile.NamedTemporaryFile(delete=False) as f:
+        f.write(data)
+        tmp_path = f.name
+    try:
+        result = subprocess.run(
+            ['openssl', 'dgst', '-sha256', '-sign', key_path, tmp_path],
+            capture_output=True, check=True, timeout=30
+        )
+        return result.stdout
+    finally:
+        os.unlink(tmp_path)
+
+
 def build_apk_v3(pkg_info: dict, files: list[PackageFile], 
-                  scripts: dict = None, output_path: str = None) -> bytes:
+                  scripts: dict = None, output_path: str = None,
+                  sign_key: str = None) -> bytes:
     """
     构建 APK v3 格式的包
     
@@ -633,14 +651,6 @@ def build_apk_v3(pkg_info: dict, files: list[PackageFile],
                 fi += 1
     
     # ============ 7. 构建完整 ADB 流 ============
-    # 解压后的数据布局:
-    #   "ADB." (4 bytes)
-    #   schema (4 bytes, little-endian u32)
-    #   ADB Block header (4 bytes) + ADB Block payload
-    #   ADB Block payload 内部: [4B prefix=0] [4B root_val] [序列化数据]
-    #   8-byte padding (after ADB block)
-    #   DATA Block header (4 bytes) + payload + padding × N files
-    
     # Patch root_val 到 w.data 的位置 4-7
     struct.pack_into('<I', w.data, 4, root_val)
     adb_payload = bytes(w.data)
@@ -660,7 +670,37 @@ def build_apk_v3(pkg_info: dict, files: list[PackageFile],
     while len(raw_stream) % 8 != 0:
         raw_stream.append(0)
     
-    # DATA Blocks
+    # ============ 7b. RSA 签名（可选） ============
+    if sign_key and os.path.isfile(sign_key):
+        # 对 ADB 块数据签名
+        adb_data = bytes(raw_stream)
+        sha256 = hashlib.sha256(adb_data).hexdigest()
+        signature = sign_rsa_sha256(adb_data, sign_key)
+        print(f"  签名 SHA256: {sha256}")
+        print(f"  签名大小: {len(signature)} 字节")
+        
+        # 构建 SIG block ADB 对象
+        sig_w = AdbWriter()
+        sig_type = sig_w.val_str("RSA256")
+        sig_blob = sig_w.val_blob32(signature)
+        sig_obj = sig_w.val_object([sig_type, sig_blob])
+        
+        sig_payload = sig_w.data
+        # Patch sig_obj at offset 0
+        struct.pack_into('<I', sig_payload, 0, sig_obj)
+        
+        sig_block_size = 4 + len(sig_payload)
+        raw_stream.extend(struct.pack('<I', (ADB_BLOCK_SIG << 30) | (sig_block_size & 0x3FFFFFFF)))
+        raw_stream.extend(sig_payload)
+        
+        while len(raw_stream) % 8 != 0:
+            raw_stream.append(0)
+        
+        print("  APK 已签名")
+    elif sign_key:
+        print(f"  警告: 签名密钥 {sign_key} 不存在，跳过签名")
+    
+    # ============ 8. DATA Blocks ============
     for fb in file_data_blocks:
         fpath = fb['path']
         if fpath not in file_index_map:
@@ -681,7 +721,7 @@ def build_apk_v3(pkg_info: dict, files: list[PackageFile],
         while len(raw_stream) % 8 != 0:
             raw_stream.append(0)
     
-    # ============ 8. 压缩 ============
+    # ============ 9. 压缩 ============
     full_data = bytes(raw_stream)
     
     # raw deflate (无 zlib 头)
@@ -711,6 +751,7 @@ def main():
     parser.add_argument('--root', default=None, help='项目根目录 (默认: 自动检测)')
     parser.add_argument('--output', '-o', default=None, help='输出文件路径')
     parser.add_argument('--depends', nargs='*', default=['libc', 'mihomo'], help='依赖包列表')
+    parser.add_argument('--sign-key', default=None, help='RSA 私钥路径（用于签名 APK）')
     
     args = parser.parse_args()
     
@@ -838,7 +879,26 @@ fi
         output = os.path.join(root, f'{args.name}_{version}_{args.arch}.apk')
     
     # 构建
-    result = build_apk_v3(pkg_info, all_files, scripts, output)
+    result = build_apk_v3(pkg_info, all_files, scripts, output, sign_key=args.sign_key)
+    
+    # 写入索引元信息（供 generate_index.py 使用）
+    import json as _json
+    idx_meta = {
+        'pkgname': pkg_info['name'],
+        'pkgver': pkg_info['version'],
+        'arch': pkg_info['arch'],
+        'pkgdesc': pkg_info['description'],
+        'license': pkg_info['license'],
+        'origin': pkg_info['origin'],
+        'maintainer': pkg_info['maintainer'],
+        'url': pkg_info['url'],
+        'size': pkg_info['installed_size'],
+        'depends': pkg_info['depends'],
+    }
+    meta_path = output + '.meta'
+    with open(meta_path, 'w') as mf:
+        _json.dump(idx_meta, mf)
+    print(f"索引元信息已保存: {meta_path}")
     
     print(f"\n完成! 输出: {output}")
     return 0

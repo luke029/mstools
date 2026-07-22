@@ -2,3 +2,4 @@
 *.ipk
 *.tar.gz
 .DS_Store
+scripts/mhtools-signing.key

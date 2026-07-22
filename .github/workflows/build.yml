@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
 
 jobs:
   build:
@@ -14,9 +16,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - run: python3 scripts/build_apk.py
+      - name: Setup signing key
+        run: |
+          mkdir -p dist/packages
+          echo "${{ secrets.APK_SIGNING_KEY }}" > /tmp/signing.key
+          cp scripts/mhtools-signing.pub dist/packages/public.key
+
+      - name: Build & Sign APK
+        run: |
+          python3 scripts/build_apk.py \
+            --sign-key /tmp/signing.key \
+            -o dist/packages/luci-app-mhtools.apk
+
+      - name: Generate APKINDEX
+        run: python3 scripts/generate_index.py dist/packages/ dist/packages/
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist
+          force_orphan: true
 
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
-          files: "*.apk"
+          files: dist/packages/*.apk
