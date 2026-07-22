@@ -189,6 +189,9 @@ start_service() {
 	cp -f "$profile_path" "$run_config"
 	_mhtools_log "App" "Config copied to: $run_config"
 
+	# 清空上次运行的旧日志，避免重启后混入旧噪声
+	: > "$LOG_DIR/mihomo.log" 2>/dev/null || true
+
 	# 向运行时配置注入 log-file，让 mihomo 将完整运行日志写入我们的日志文件
 	local mihomo_log="$LOG_DIR/mihomo.log"
 	mkdir -p "$LOG_DIR"

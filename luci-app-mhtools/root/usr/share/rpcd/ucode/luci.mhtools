@@ -367,24 +367,19 @@ const methods = {
 		args: { lines: 'lines' },
 		call: function (req) {
 			let lines = (req.args && req.args.lines != null) ? int(req.args.lines) : 300;
-			let parts = [];
+			let appLog = '';
+			let kernelLog = '';
 
-			let running = false;
-				let mihomoProc = popen('pgrep mihomo 2>/dev/null');
-			if (mihomoProc) { if (trim(mihomoProc.read('all'))) running = true; mihomoProc.close(); }
-
-			// 应用日志（任何情况下都显示）
+			// 应用日志
 			if (access(appLogPath, 'r')) {
 				let proc = popen('tail -n 50 ' + appLogPath);
-				if (proc) {
-					let log = proc.read('all');
-					proc.close();
-					if (log && trim(log)) {
-						push(parts, '===== 应用日志（MHTools 操作记录）=====');
-						push(parts, log);
-					}
-				}
+				if (proc) { appLog = trim(proc.read('all')); proc.close(); }
 			}
+
+			// 内核日志
+			let running = false;
+			let mihomoProc = popen('pgrep mihomo 2>/dev/null');
+			if (mihomoProc) { if (trim(mihomoProc.read('all'))) running = true; mihomoProc.close(); }
 
 			if (running) {
 				// 方式一：通过 mihomo API 获取实时运行日志
@@ -407,7 +402,6 @@ const methods = {
 				}
 
 				if (apiLogs) {
-					// 解析 SSE 格式：data: {"type":"warning","payload":"...","time":"..."}
 					let logEntries = [];
 					let sseLines = split(apiLogs, '\n');
 					for (let i = 0; i < length(sseLines); i++) {
@@ -426,38 +420,25 @@ const methods = {
 						}
 					}
 					if (length(logEntries) > 0) {
-						push(parts, '===== 内核运行日志（Mihomo API）=====');
 						let start = length(logEntries) > lines ? length(logEntries) - lines : 0;
-						for (let i = start; i < length(logEntries); i++) {
-							push(parts, logEntries[i]);
-						}
-					} else {
-						push(parts, '===== 内核运行中，暂无日志输出 =====');
+						kernelLog = join('\n', slice(logEntries, start));
 					}
-				} else {
-					// 方式二：回退到读取日志文件
-					let kernelLog = '';
+				}
+
+				if (!kernelLog) {
 					let logPath = '/var/log/mhtools/mihomo.log';
 					if (access(logPath, 'r')) {
 						let proc = popen('tail -n ' + lines + ' ' + logPath);
-						if (proc) { kernelLog = proc.read('all'); proc.close(); }
+						if (proc) { kernelLog = trim(proc.read('all')); proc.close(); }
 					}
-					if (!kernelLog || !trim(kernelLog)) {
+					if (!kernelLog) {
 						let proc = popen('logread 2>/dev/null | grep -iE "mihomo|mhtools" | tail -n ' + lines);
-						if (proc) { kernelLog = proc.read('all'); proc.close(); }
-					}
-					if (kernelLog && trim(kernelLog)) {
-						push(parts, '===== 内核运行日志（文件）=====');
-						push(parts, kernelLog);
-					} else {
-						push(parts, '===== 内核运行中，暂无日志输出 =====');
+						if (proc) { kernelLog = trim(proc.read('all')); proc.close(); }
 					}
 				}
-			} else {
-				push(parts, '===== 内核未运行 =====');
 			}
 
-			return { log: join('\n', parts) };
+			return { app_log: appLog, kernel_log: kernelLog };
 		}
 	},
 

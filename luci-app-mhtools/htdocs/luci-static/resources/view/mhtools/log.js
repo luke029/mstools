@@ -19,14 +19,16 @@ var CSS = [
 	'.ms-btn.danger:hover{background:rgba(255,69,58,.08);border-color:rgba(255,69,58,.3);color:#ff453a}',
 	'.ms-auto-refresh{display:flex;align-items:center;gap:6px;font-size:13px;color:#6e6e73;cursor:pointer}',
 	'.ms-auto-refresh input{cursor:pointer}',
+	'.ms-log-section{margin-bottom:16px}',
+	'.ms-log-section-title{font-size:15px;font-weight:600;margin-bottom:8px;display:flex;align-items:center;gap:6px}',
 	'.ms-log-box{border-radius:16px;overflow:hidden;background:rgba(255,255,255,.72);backdrop-filter:saturate(180%) blur(20px);box-shadow:0 1px 3px rgba(0,0,0,.04),0 4px 16px rgba(0,0,0,.05);border:1px solid rgba(0,0,0,.06)}',
-	'.ms-log-box pre{margin:0;padding:20px 24px;font-size:12px;line-height:1.6;color:#1d1d1f;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;height:calc(100vh - 160px);min-height:500px;overflow:auto;white-space:pre-wrap;word-break:break-all}',
+	'.ms-log-box pre{margin:0;padding:20px 24px;font-size:12px;line-height:1.6;color:#1d1d1f;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;min-height:200px;max-height:40vh;overflow:auto;white-space:pre-wrap;word-break:break-all}',
 	'.ms-log-empty{text-align:center;padding:60px 20px;color:#86868b;font-size:14px}',
 	'body.dark .ms-log-box,body[data-theme="dark"] .ms-log-box{background:rgba(30,30,32,.72);border-color:rgba(255,255,255,.06)}',
 	'body.dark .ms-log-box pre,body[data-theme="dark"] .ms-log-box pre{color:#f5f5f7}',
 	'body.dark .ms-btn,body[data-theme="dark"] .ms-btn{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.1);color:#f5f5f7}',
 	'body.dark .ms-log-lines select,body[data-theme="dark"] .ms-log-lines select{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.1);color:#f5f5f7}',
-	'@media(max-width:640px){.ms-log-head{flex-direction:column;align-items:flex-start;gap:12px}.ms-log-tools{flex-wrap:wrap}.ms-log-box pre{height:50vh}}'
+	'@media(max-width:640px){.ms-log-head{flex-direction:column;align-items:flex-start;gap:12px}.ms-log-tools{flex-wrap:wrap}.ms-log-box pre{max-height:30vh}}'
 ].join('');
 
 return view.extend({
@@ -42,7 +44,8 @@ return view.extend({
 		var autoRefresh = true;
 		var logSizeLimit = uci.get('mhtools', 'core', 'log_size_limit') || '300';
 
-		var logPre = E('pre', { id: 'ms-log-content' }, '加载中...');
+		var appLogPre = E('pre', { id: 'ms-app-log-content' }, '加载中...');
+		var kernelLogPre = E('pre', { id: 'ms-kernel-log-content' }, '');
 
 		var lineSelect = E('select', {
 			change: function () {
@@ -73,19 +76,24 @@ return view.extend({
 			style: 'width:56px;padding:3px 6px;font-size:12px;border:1px solid rgba(128,128,128,.2);border-radius:6px;text-align:center;'
 		});
 
+		function renderLogContent(text, pre) {
+			if (!text || text.trim() === '') {
+				pre.textContent = '（暂无日志）';
+			} else {
+				pre.textContent = text;
+				pre.scrollTop = pre.scrollHeight;
+			}
+		}
+
 		function loadLog() {
 			dp.getAllLogs(lineCount).then(function (r) {
-				if (logPre && r) {
-					var log = r.log || '';
-					if (!log || log.trim() === '') {
-						logPre.textContent = '（暂无日志，启动服务或操作后此处会显示日志）';
-					} else {
-						logPre.textContent = log;
-						logPre.scrollTop = logPre.scrollHeight;
-					}
+				if (r) {
+					renderLogContent(r.app_log, appLogPre);
+					renderLogContent(r.kernel_log, kernelLogPre);
 				}
 			}).catch(function () {
-				logPre.textContent = '（加载日志失败）';
+				appLogPre.textContent = '（加载日志失败）';
+				kernelLogPre.textContent = '（加载日志失败）';
 			});
 		}
 
@@ -148,7 +156,20 @@ return view.extend({
 					])
 				])
 			]),
-			E('div', { 'class': 'ms-log-box' }, logPre)
+			E('div', { 'class': 'ms-log-section' }, [
+				E('div', { 'class': 'ms-log-section-title' }, [
+					E('span', { style: 'width:6px;height:6px;border-radius:50%;background:#34c759;display:inline-block' }),
+					'应用日志'
+				]),
+				E('div', { 'class': 'ms-log-box' }, appLogPre)
+			]),
+			E('div', { 'class': 'ms-log-section' }, [
+				E('div', { 'class': 'ms-log-section-title' }, [
+					E('span', { style: 'width:6px;height:6px;border-radius:50%;background:#007aff;display:inline-block' }),
+					'内核日志'
+				]),
+				E('div', { 'class': 'ms-log-box' }, kernelLogPre)
+			])
 		]);
 
 		return pageEl;
