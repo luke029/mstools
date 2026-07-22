@@ -51,12 +51,24 @@ else
 	info "TUN kernel module already loaded."
 fi
 
-# --- mihomo 内核 ---
+# --- mihomo 内核（获取策略：复用 > 镜像下载 > 手动兜底）---
 MIHOMO_BIN="/usr/bin/mihomo"
 MIHOMO_VER="v1.19.29"  # 当前推荐版本
-if [ ! -x "$MIHOMO_BIN" ]; then
-	warn "mihomo binary not found. Downloading..."
 
+# 1) 复用：已存在 /usr/bin/mihomo 直接复用；否则把 PATH 中的
+#    clash-meta / mihomo 软链到 /usr/bin/mihomo（服务默认读这个路径）
+if [ -x "$MIHOMO_BIN" ]; then
+	info "Reusing existing mihomo: $MIHOMO_BIN"
+	"$MIHOMO_BIN" version 2>&1 | head -1
+elif META_BIN=$(command -v clash-meta 2>/dev/null) && [ -n "$META_BIN" ]; then
+	ln -sf "$META_BIN" "$MIHOMO_BIN"
+	info "Linked existing clash-meta ($META_BIN) -> $MIHOMO_BIN"
+elif MH_BIN=$(command -v mihomo 2>/dev/null) && [ -n "$MH_BIN" ]; then
+	ln -sf "$MH_BIN" "$MIHOMO_BIN"
+	info "Linked existing mihomo ($MH_BIN) -> $MIHOMO_BIN"
+else
+	# 2) 下载：依次尝试官方源与多个 GitHub 代理镜像。
+	#    解决"刚刷好的路由还没有代理、却要从 GitHub 下载代理内核"的矛盾。
 	ARCH=$(uname -m)
 	case "$ARCH" in
 		aarch64|arm64)    MIHOMO_ARCH="linux-arm64" ;;
@@ -67,25 +79,36 @@ if [ ! -x "$MIHOMO_BIN" ]; then
 		*) error "Unknown architecture: $ARCH"; exit 1 ;;
 	esac
 
-	MIHOMO_URL="https://github.com/MetaCubeX/mihomo/releases/download/${MIHOMO_VER}/mihomo-${MIHOMO_ARCH}-${MIHOMO_VER}.gz"
-	info "Downloading: $MIHOMO_URL"
+	REL="MetaCubeX/mihomo/releases/download/${MIHOMO_VER}/mihomo-${MIHOMO_ARCH}-${MIHOMO_VER}.gz"
+	MIRRORS="
+https://github.com/${REL}
+https://ghproxy.net/https://github.com/${REL}
+https://mirror.ghproxy.com/https://github.com/${REL}
+"
+	DOWNLOADED=""
+	for url in $MIRRORS; do
+		info "Trying mirror: $url"
+		if command -v wget >/dev/null 2>&1; then
+			wget -O /tmp/mihomo.gz "$url" 2>/dev/null && DOWNLOADED=1 && break
+		elif command -v curl >/dev/null 2>&1; then
+			curl -sL "$url" -o /tmp/mihomo.gz 2>/dev/null && DOWNLOADED=1 && break
+		fi
+	done
 
-	if command -v wget >/dev/null 2>&1; then
-		wget -O /tmp/mihomo.gz "$MIHOMO_URL"
-	elif command -v curl >/dev/null 2>&1; then
-		curl -sL "$MIHOMO_URL" -o /tmp/mihomo.gz
+	if [ -n "$DOWNLOADED" ] && [ -s /tmp/mihomo.gz ]; then
+		gunzip -f /tmp/mihomo.gz
+		mv /tmp/mihomo "$MIHOMO_BIN"
+		chmod +x "$MIHOMO_BIN"
+		info "mihomo ${MIHOMO_VER} installed to $MIHOMO_BIN"
 	else
-		error "Neither wget nor curl found. Cannot download mihomo."
-		exit 1
+		# 3) 手动兜底：不阻断 LuCI 安装，提示用户稍后放置内核
+		warn "Could not download mihomo automatically (no network / all mirrors failed)."
+		warn "The LuCI app will still be installed, but the service won't start"
+		warn "until a mihomo binary exists at $MIHOMO_BIN."
+		warn "Fix manually:"
+		warn "  - place the binary at $MIHOMO_BIN, or"
+		warn "  - opkg install mihomo   (if available in your feed)"
 	fi
-
-	gunzip -f /tmp/mihomo.gz
-	mv /tmp/mihomo "$MIHOMO_BIN"
-	chmod +x "$MIHOMO_BIN"
-	info "mihomo ${MIHOMO_VER} installed to $MIHOMO_BIN"
-else
-	info "mihomo binary found: $MIHOMO_BIN"
-	$MIHOMO_BIN version 2>&1 | head -1
 fi
 
 # ============================================================
@@ -100,21 +123,42 @@ fi
 
 info "Installing MHTools files..."
 
-# 拷贝 htdocs (LuCI 前端 JS/CSS)
+# 安装清单：记录所有安装的文件，供 uninstall.sh 精确卸载
+MANIFEST="/usr/share/mhtools/manifest"
+mkdir -p "$(dirname "$MANIFEST")"
+: > "$MANIFEST"
+record() { echo "$1" >> "$MANIFEST"; }
+
+# 拷贝 htdocs (LuCI 前端 JS/CSS) 并记录清单
 if [ -d "$SRC_DIR/htdocs" ]; then
-	cp -a "$SRC_DIR/htdocs/"* /www/
+	( cd "$SRC_DIR/htdocs" && find . -type f -not -name '.DS_Store' ) | while read -r f; do
+		f="${f#./}"
+		tgt="/www/$f"
+		mkdir -p "$(dirname "$tgt")"
+		cp -a "$SRC_DIR/htdocs/$f" "$tgt"
+		record "$tgt"
+	done
 	info "LuCI frontend installed."
 fi
 
-# 拷贝 root 下的系统文件
+# 拷贝 root 下的系统文件 并记录清单
 if [ -d "$SRC_DIR/root" ]; then
 	for dir in etc usr; do
 		if [ -d "$SRC_DIR/root/$dir" ]; then
-			cp -a "$SRC_DIR/root/$dir"/* "/$dir/"
+			( cd "$SRC_DIR/root/$dir" && find . -type f -not -name '.DS_Store' ) | while read -r f; do
+				f="${f#./}"
+				tgt="/$dir/$f"
+				mkdir -p "$(dirname "$tgt")"
+				cp -a "$SRC_DIR/root/$dir/$f" "$tgt"
+				record "$tgt"
+			done
 		fi
 	done
 	info "System files installed."
 fi
+
+# 记录清单自身，便于卸载时定位
+record "$MANIFEST"
 
 # 创建设备目录
 mkdir -p /etc/mhtools/profiles
@@ -159,4 +203,9 @@ echo ""
 echo " To check status:"
 echo "   /etc/init.d/mhtools list_profiles"
 echo "   /etc/init.d/mhtools validate_profile"
+echo ""
+echo " Manage:"
+echo "   Upgrade (in-place): sh install.sh"
+echo "   Clean reinstall:     sh uninstall.sh && sh install.sh"
+echo "   Uninstall:           sh uninstall.sh"
 echo "============================================"
