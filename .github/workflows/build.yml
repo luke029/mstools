@@ -16,14 +16,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup signing key
+      - name: Build APK (Release 版：无签名，可直接上传安装)
         run: |
-          mkdir -p dist/packages
+          mkdir -p dist/release dist/packages
+          python3 scripts/build_apk.py -o dist/release/luci-app-mhtools.apk
+
+      - name: Setup signing & Build signed APK (Feed 版)
+        run: |
           echo "${{ secrets.APK_SIGNING_KEY }}" > /tmp/signing.key
           cp scripts/mhtools-signing.pub dist/packages/public.key
-
-      - name: Build & Sign APK
-        run: |
           python3 scripts/build_apk.py \
             --sign-key /tmp/signing.key \
             -o dist/packages/luci-app-mhtools.apk
@@ -41,4 +42,4 @@ jobs:
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/packages/*.apk
+          files: dist/release/*.apk
